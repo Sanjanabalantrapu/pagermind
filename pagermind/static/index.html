@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PagerMind · On-call console</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a; --text:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --good:#3fb950; --bad:#f85149; --warn:#d29922; --obs:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:14px 24px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:18px;margin:0;letter-spacing:.2px}
+  header h1 span{color:var(--accent)}
+  #status{color:var(--muted);font-size:12px;margin-left:auto}
+  main{display:grid;grid-template-columns:360px 1fr;gap:16px;padding:16px 24px;max-width:1500px;margin:0 auto}
+  @media (max-width:900px){main{grid-template-columns:1fr;padding:12px 16px}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:16px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 10px}
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px}
+  input,select,textarea{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit}
+  textarea{min-height:110px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+  button{background:var(--accent);color:#0b1020;border:0;border-radius:6px;padding:9px 14px;font-weight:600;cursor:pointer;font:inherit;font-weight:600}
+  button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+  button:disabled{opacity:.5;cursor:wait}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .presets button{background:var(--panel2);color:var(--text);border:1px solid var(--line);font-weight:500;font-size:12px;padding:6px 10px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:1100px){.cols{grid-template-columns:1fr}}
+  .brief{min-height:140px}
+  .brief h3{margin:0 0 8px;font-size:14px;display:flex;gap:8px;align-items:center}
+  .pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);font-weight:500}
+  .pill.on{color:var(--good);border-color:var(--good)} .pill.off{color:var(--bad);border-color:var(--bad)}
+  .md p{margin:6px 0} .md ul,.md ol{margin:4px 0 8px;padding-left:20px} .md code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:12.5px}
+  .md strong{color:#fff}
+  .mem{border-left:3px solid var(--accent);background:var(--panel2);padding:8px 10px;border-radius:0 6px 6px 0;margin:8px 0;font-size:12.5px}
+  .mem.experience{border-color:var(--warn)} .mem.observation{border-color:var(--obs)}
+  .mem .meta{font-size:11px;color:var(--muted);margin-bottom:3px;display:flex;gap:6px;flex-wrap:wrap}
+  .muted{color:var(--muted)} .ok{color:var(--good)} .err{color:var(--bad)}
+  .trace{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted);white-space:pre-wrap}
+  .radio{display:flex;gap:14px;margin-top:6px} .radio label{display:flex;gap:6px;align-items:center;margin:0;color:var(--text)} .radio input{width:auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>Pager<span>Mind</span> <span class="muted" style="font-weight:400">· on-call copilot with memory</span></h1>
+  <div id="status">connecting…</div>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <h2>Incoming alert</h2>
+      <div class="row presets" id="presets"></div>
+      <label>Service</label><input id="svc">
+      <label>Severity</label>
+      <select id="sev"><option>SEV1</option><option selected>SEV2</option><option>SEV3</option></select>
+      <label>Title</label><input id="title">
+      <label>Details / log lines</label><textarea id="details"></textarea>
+      <div class="row">
+        <button id="compareBtn">Triage: without vs with memory</button>
+        <button class="ghost" id="memBtn">With memory only</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Close the loop (teach PagerMind)</h2>
+      <label>Step you applied</label><input id="fbStep" placeholder="e.g. kubectl argo rollouts abort checkout-api -n shop">
+      <div class="radio"><label><input type="radio" name="fb" value="1" checked> Worked</label><label><input type="radio" name="fb" value="0"> Did not work</label></div>
+      <label>Engineer</label><input id="fbWho" value="Rohan Das">
+      <label>Note</label><input id="fbNote" placeholder="optional">
+      <div class="row"><button id="fbBtn">Retain feedback</button></div>
+      <div id="fbOut" class="muted" style="margin-top:8px;font-size:12px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Ask the team memory</h2>
+      <input id="q" value="What keeps breaking checkout-api, and what should we fix permanently?">
+      <div class="row"><button id="askBtn">Reflect</button><button class="ghost" id="seedBtn">Seed incident history</button></div>
+      <div id="askOut" class="md" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="cols">
+      <div class="card brief"><h3>Without memory <span class="pill off">stateless</span></h3><div id="outOff" class="md muted">Run a triage to compare.</div></div>
+      <div class="card brief"><h3>With Hindsight memory <span class="pill on">recall + retain</span> <span id="meta" class="pill"></span></h3><div id="outOn" class="md muted">…</div></div>
+    </div>
+    <div class="card">
+      <h2>Memories recalled for this alert</h2>
+      <div id="mems" class="muted">None yet.</div>
+      <div id="trace" class="trace"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let ALERTS = [];
+
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function md(s){
+  const lines = esc(s||"").split(/\n/); let html="", list=null;
+  const inline = t => t.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/`([^`]+)`/g,"<code>$1</code>");
+  for (const raw of lines){
+    const l = raw.trim();
+    const ul = l.match(/^[-*]\s+(.*)/), ol = l.match(/^\d+[.)]\s+(.*)/);
+    if (ul||ol){ const tag = ul?"ul":"ol"; if(list!==tag){ if(list) html+=`</${list}>`; html+=`<${tag}>`; list=tag;} html+=`<li>${inline((ul||ol)[1])}</li>`; continue; }
+    if (list){ html+=`</${list}>`; list=null; }
+    if (l.startsWith("#")) { html+=`<p><strong>${inline(l.replace(/^#+\s*/,""))}</strong></p>`; continue; }
+    if (l) html+=`<p>${inline(l)}</p>`;
+  }
+  if (list) html+=`</${list}>`;
+  return html;
+}
+async function api(path, body){
+  const r = await fetch(path, body ? {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)} : {});
+  const j = await r.json().catch(()=>({detail:r.statusText}));
+  if(!r.ok) throw new Error(j.detail ? (typeof j.detail==="string"?j.detail:JSON.stringify(j.detail)) : r.statusText);
+  return j;
+}
+function currentAlert(){
+  return {id: $("title").dataset.id || null, service:$("svc").value.trim(), severity:$("sev").value, title:$("title").value.trim(), details:$("details").value.trim()};
+}
+function loadAlert(a){ $("svc").value=a.service; $("sev").value=a.severity; $("title").value=a.title; $("title").dataset.id=a.id; $("details").value=a.details; }
+async function refreshStatus(){
+  try{ const s = await api("/api/status");
+    $("status").textContent = `${s.memory_backend} · bank ${s.bank_id} · ${s.memory_count>=0?s.memory_count+" memories":"count n/a"} · LLM ${s.llm}`;
+  }catch(e){ $("status").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+function renderMems(res){
+  if(!res.memories.length){ $("mems").innerHTML='<span class="muted">No memories recalled.</span>'; }
+  else $("mems").innerHTML = res.memories.map(m=>`<div class="mem ${m.type}"><div class="meta"><span>${m.type}</span>${m.document_id?`<span>${esc(m.document_id)}</span>`:""}${m.when?`<span>${esc(m.when.slice(0,10))}</span>`:""}${(m.tags||[]).map(t=>`<span>#${esc(t)}</span>`).join("")}</div>${esc(m.text)}</div>`).join("");
+  $("trace").textContent = res.tool_trace.length ? "Agent tool calls:\n"+res.tool_trace.map(t=>`→ ${t.tool}(${JSON.stringify(t.args)})`).join("\n") : "";
+  $("meta").textContent = `${res.memories.length} memories · ${res.seconds}s${res.degraded?" · tools degraded":""}`;
+}
+async function run(compare){
+  const a = currentAlert(); if(!a.service||a.title.length<3){alert("Service and title are required");return;}
+  const btns=[$("compareBtn"),$("memBtn")]; btns.forEach(b=>b.disabled=true);
+  $("outOn").innerHTML='<span class="muted">Recalling from Hindsight and reasoning…</span>';
+  $("outOff").innerHTML = compare ? '<span class="muted">Thinking without memory…</span>' : $("outOff").innerHTML;
+  try{
+    const jobs=[api("/api/triage",{alert:a,use_memory:true})];
+    if(compare) jobs.push(api("/api/triage",{alert:a,use_memory:false}));
+    const [on,off] = await Promise.allSettled(jobs).then(rs=>rs.map(r=>r.status==="fulfilled"?r.value:{error:r.reason.message}));
+    if(on.error) $("outOn").innerHTML=`<span class="err">${esc(on.error)}</span>`; else { $("outOn").innerHTML=md(on.answer); renderMems(on); }
+    if(compare) $("outOff").innerHTML = off.error?`<span class="err">${esc(off.error)}</span>`:md(off.answer);
+    refreshStatus();
+  } finally { btns.forEach(b=>b.disabled=false); }
+}
+$("compareBtn").onclick=()=>run(true);
+$("memBtn").onclick=()=>run(false);
+$("fbBtn").onclick=async()=>{
+  $("fbBtn").disabled=true;
+  try{ const r = await api("/api/feedback",{alert:currentAlert(),step:$("fbStep").value,worked:document.querySelector('input[name=fb]:checked').value==="1",engineer:$("fbWho").value,note:$("fbNote").value});
+    $("fbOut").innerHTML=`<span class="ok">Retained:</span> ${esc(r.retained)}`; refreshStatus();
+  }catch(e){ $("fbOut").innerHTML=`<span class="err">${esc(e.message)}</span>`; } finally{ $("fbBtn").disabled=false; }
+};
+$("askBtn").onclick=async()=>{
+  $("askBtn").disabled=true; $("askOut").innerHTML='<span class="muted">Reflecting over memory…</span>';
+  try{ const r=await api("/api/ask",{question:$("q").value}); $("askOut").innerHTML=md(r.answer); }
+  catch(e){ $("askOut").innerHTML=`<span class="err">${esc(e.message)}</span>`; } finally{ $("askBtn").disabled=false; }
+};
+$("seedBtn").onclick=async()=>{
+  $("seedBtn").disabled=true; $("askOut").innerHTML='<span class="muted">Retaining 12 incidents + team knowledge…</span>';
+  try{ const r=await api("/api/seed",{}); $("askOut").innerHTML=`<span class="ok">Retained ${r.retained} documents.</span>`; refreshStatus(); }
+  catch(e){ $("askOut").innerHTML=`<span class="err">${esc(e.message)}</span>`; } finally{ $("seedBtn").disabled=false; }
+};
+(async()=>{
+  refreshStatus();
+  try{ ALERTS = await api("/api/alerts");
+    $("presets").innerHTML = ALERTS.map((a,i)=>`<button data-i="${i}">${esc(a.service)}</button>`).join("");
+    $("presets").querySelectorAll("button").forEach(b=>b.onclick=()=>loadAlert(ALERTS[b.dataset.i]));
+    if(ALERTS[0]) loadAlert(ALERTS[0]);
+  }catch(e){}
+})();
+</script>
+</body>
+</html>

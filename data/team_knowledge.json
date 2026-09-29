@@ -1,0 +1,8 @@
+[
+  {"content": "Priya Raman (SRE lead) wants every triage to start with the exact rollback command, before any diagnosis.", "tags": ["kind:preference"]},
+  {"content": "The payments team (owner: Arjun Mehta, DBA) must be paged for anything touching payments-db or pgbouncer. Slack channel #payments-oncall.", "tags": ["kind:ownership", "service:payments-db", "service:checkout-api"]},
+  {"content": "checkout-api is deployed with Argo Rollouts. Rollback command: kubectl argo rollouts abort checkout-api -n shop && kubectl argo rollouts undo checkout-api -n shop.", "tags": ["kind:runbook", "service:checkout-api"]},
+  {"content": "Change freeze: no deploys to checkout-api or payments-db between 18:00 and 23:00 IST on sale days.", "tags": ["kind:policy", "service:checkout-api", "service:payments-db"]},
+  {"content": "notifications-worker consumes topics otp-events (12 partitions) and receipt-events (12 partitions).", "tags": ["kind:topology", "service:notifications-worker"]},
+  {"content": "search-api feature flags are toggled with flagctl; the search team prefers flags over rollbacks because rollbacks take 12 minutes.", "tags": ["kind:preference", "service:search-api"]}
+]

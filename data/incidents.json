@@ -1,0 +1,189 @@
+[
+  {
+    "id": "INC-2291",
+    "date": "2026-03-14T19:42:00+05:30",
+    "service": "checkout-api",
+    "severity": "SEV1",
+    "title": "Checkout 5xx spike after v2.33.0 deploy",
+    "symptoms": "checkout-api 5xx rose to 22% within 6 minutes of deploying v2.33.0. p99 latency 5.1s. Logs: 'FATAL: remaining connection slots are reserved for non-replication superuser connections' and 'pgbouncer: no more connections allowed (max_client_conn)'.",
+    "root_cause": "v2.33.0 raised the per-pod SQLAlchemy pool_size from 10 to 25. With 48 pods that is 1,200 client connections against pgbouncer max_client_conn=1000 in front of payments-db.",
+    "attempted": [
+      {"action": "Restart checkout-api pods (kubectl rollout restart)", "worked": false, "note": "Made it worse: every restarting pod opened a fresh pool at once, a reconnect storm. 5xx peaked at 31%."},
+      {"action": "Roll back checkout-api to v2.32.4 (argocd app rollback checkout-api)", "worked": true, "note": "5xx back under 0.5% within 4 minutes."}
+    ],
+    "resolved_by": "Priya Raman",
+    "mttr_minutes": 38,
+    "postmortem": "Any change to DB pool size must be reviewed against pgbouncer max_client_conn x pod count. Added a CI check that fails if pool_size * max_replicas > 800."
+  },
+  {
+    "id": "INC-2417",
+    "date": "2026-05-02T11:05:00+05:30",
+    "service": "checkout-api",
+    "severity": "SEV2",
+    "title": "Checkout errors during HPA scale-out for sale traffic",
+    "symptoms": "5xx at 9% while HPA scaled checkout-api from 30 to 70 pods for the Akshaya Tritiya sale. Logs again show 'pgbouncer: no more connections allowed (max_client_conn)'.",
+    "root_cause": "The CI pool check used max_replicas=40 but HPA max had been raised to 80 in a separate PR. 80 pods x pool 10 = 800 + background jobs exceeded pgbouncer limit.",
+    "attempted": [
+      {"action": "Restart checkout-api pods", "worked": false, "note": "Same reconnect storm as INC-2291. Someone on call did not know the history."},
+      {"action": "Temporarily cap HPA maxReplicas at 55 (kubectl patch hpa checkout-api)", "worked": true, "note": "Errors cleared in 3 minutes, latency stayed acceptable."},
+      {"action": "Raise pgbouncer max_client_conn to 2000 and default_pool_size to 60", "worked": true, "note": "Permanent fix, applied next morning by DBA Arjun Mehta."}
+    ],
+    "resolved_by": "Daniel Okafor",
+    "mttr_minutes": 26,
+    "postmortem": "Restarting checkout-api during pgbouncer exhaustion is actively harmful. The CI pool check now reads maxReplicas from the HPA manifest."
+  },
+  {
+    "id": "INC-2130",
+    "date": "2026-01-19T02:17:00+05:30",
+    "service": "notifications-worker",
+    "severity": "SEV2",
+    "title": "OTP SMS delayed up to 14 minutes",
+    "symptoms": "Kafka consumer group notifications-worker lag on topic otp-events grew to 480k. Logs: 'CommitFailedException: Commit cannot be completed since the group has already rebalanced'.",
+    "root_cause": "A new SMS provider client added a synchronous retry with 45s backoff. Batches took longer than max.poll.interval.ms=300000, so consumers were kicked from the group, causing rebalance storms.",
+    "attempted": [
+      {"action": "Scale notifications-worker from 6 to 24 replicas", "worked": false, "note": "More consumers than partitions (12); extra pods sat idle and every join triggered another rebalance."},
+      {"action": "Lower max.poll.records from 500 to 50 and set provider timeout to 5s", "worked": true, "note": "Lag drained in 11 minutes."}
+    ],
+    "resolved_by": "Meera Iyer",
+    "mttr_minutes": 64,
+    "postmortem": "Never scale a Kafka consumer beyond its partition count. Look for CommitFailedException before scaling."
+  },
+  {
+    "id": "INC-2388",
+    "date": "2026-04-21T23:40:00+05:30",
+    "service": "notifications-worker",
+    "severity": "SEV3",
+    "title": "Email receipts lagging",
+    "symptoms": "Consumer lag on topic receipt-events at 90k and rising. Logs: 'Member consumer-7 sending LeaveGroup request to coordinator due to consumer poll timeout has expired'.",
+    "root_cause": "Template rendering service slowed down; long batches exceeded max.poll.interval.ms. Same failure mode as INC-2130.",
+    "attempted": [
+      {"action": "Lower max.poll.records to 50", "worked": true, "note": "Lag cleared in 7 minutes. Recognised the pattern from INC-2130."}
+    ],
+    "resolved_by": "Meera Iyer",
+    "mttr_minutes": 12,
+    "postmortem": "Poll-timeout rebalances are the most common cause of consumer lag on notifications-worker."
+  },
+  {
+    "id": "INC-2205",
+    "date": "2026-02-26T09:12:00+05:30",
+    "service": "auth-service",
+    "severity": "SEV1",
+    "title": "All logins failing with 401",
+    "symptoms": "100% of token validations failing. Logs: 'JWKS fetch failed: x509: certificate has expired or is not yet valid' from auth-service calling idp.internal.",
+    "root_cause": "The internal IdP TLS certificate expired. cert-manager renewal had been failing silently for 21 days due to a deleted ClusterIssuer secret.",
+    "attempted": [
+      {"action": "Restart auth-service", "worked": false, "note": "JWKS cache is in memory, restart just dropped the last good keys."},
+      {"action": "Recreate the ClusterIssuer secret and force renewal (cmctl renew idp-tls -n identity)", "worked": true, "note": "Logins recovered in 9 minutes."}
+    ],
+    "resolved_by": "Sanjay Kulkarni",
+    "mttr_minutes": 47,
+    "postmortem": "Added alert on certmanager_certificate_expiration_timestamp_seconds < 14 days. Do not restart auth-service during JWKS failures: it clears the cached keys."
+  },
+  {
+    "id": "INC-2352",
+    "date": "2026-04-08T14:55:00+05:30",
+    "service": "search-api",
+    "severity": "SEV2",
+    "title": "Product search returning 429s",
+    "symptoms": "search-api 429 rate at 35%. Elasticsearch logs: 'CircuitBreakingException: [parent] Data too large, data for [<http_request>] would be [7.9gb], which is larger than the limit of [7.6gb]'.",
+    "root_cause": "A new 'similar products' aggregation used a terms agg on a high-cardinality field with size 10000 and blew the parent circuit breaker on data nodes.",
+    "attempted": [
+      {"action": "Feature-flag off similar-products aggregation (flagctl set search.similar_products false)", "worked": true, "note": "429s dropped to zero in 2 minutes."}
+    ],
+    "resolved_by": "Aisha Khan",
+    "mttr_minutes": 18,
+    "postmortem": "Heavy aggregations must be behind a flag and load tested against production-size indices."
+  },
+  {
+    "id": "INC-2460",
+    "date": "2026-05-27T20:03:00+05:30",
+    "service": "search-api",
+    "severity": "SEV3",
+    "title": "Search latency degraded after reindex",
+    "symptoms": "p95 search latency 1.8s (normal 180ms). Elasticsearch hot threads show merges; JVM heap at 92% on data nodes.",
+    "root_cause": "Nightly reindex job ran with refresh_interval=1s and replicas=1 instead of refresh -1 / replicas 0 during bulk load.",
+    "attempted": [
+      {"action": "Pause reindex job and set index.refresh_interval back to 30s", "worked": true, "note": "Latency normal in 10 minutes."}
+    ],
+    "resolved_by": "Aisha Khan",
+    "mttr_minutes": 22,
+    "postmortem": "Reindex job now sets refresh_interval=-1 and number_of_replicas=0 during bulk and restores after."
+  },
+  {
+    "id": "INC-2511",
+    "date": "2026-06-18T16:30:00+05:30",
+    "service": "checkout-api",
+    "severity": "SEV2",
+    "title": "Checkout slow due to Redis evictions",
+    "symptoms": "p99 checkout latency 3.4s, 5xx at 2%. Redis INFO shows evicted_keys climbing 40k/min; cart-cache hit rate dropped from 97% to 41%.",
+    "root_cause": "A promo banner feature stored full product JSON per session in the cart-cache Redis (maxmemory 4gb, allkeys-lru).",
+    "attempted": [
+      {"action": "Disable promo-banner cache writes via flag (flagctl set checkout.promo_banner_cache false)", "worked": true, "note": "Hit rate back to 95% in 15 minutes."}
+    ],
+    "resolved_by": "Daniel Okafor",
+    "mttr_minutes": 31,
+    "postmortem": "Separate Redis instance for experimental features. Alert on evicted_keys rate."
+  },
+  {
+    "id": "INC-2544",
+    "date": "2026-07-09T08:20:00+05:30",
+    "service": "payments-db",
+    "severity": "SEV1",
+    "title": "Payments DB replica lag 9 minutes",
+    "symptoms": "Replica lag on payments-db-replica-1 at 540s. Order status pages showing stale 'payment pending'. pg_stat_activity shows a long-running 'VACUUM FULL payments_ledger'.",
+    "root_cause": "A DBA script ran VACUUM FULL on a 380GB table on the primary during business hours, generating massive WAL.",
+    "attempted": [
+      {"action": "Cancel the VACUUM FULL (SELECT pg_cancel_backend(pid))", "worked": true, "note": "Replica caught up in 12 minutes."},
+      {"action": "Failover reads to replica-2", "worked": false, "note": "replica-2 was equally lagged; pointless."}
+    ],
+    "resolved_by": "Arjun Mehta",
+    "mttr_minutes": 29,
+    "postmortem": "VACUUM FULL on payments-db requires a change ticket and a maintenance window. Use pg_repack instead."
+  },
+  {
+    "id": "INC-2573",
+    "date": "2026-07-30T13:10:00+05:30",
+    "service": "checkout-api",
+    "severity": "SEV2",
+    "title": "Intermittent DNS timeouts from checkout pods",
+    "symptoms": "0.8% of calls to payments-gateway fail with 'dial tcp: lookup payments-gateway.prod.svc.cluster.local: i/o timeout'. CoreDNS CPU at 95%.",
+    "root_cause": "ndots:5 default caused 5 search-domain lookups per external call; a new fraud-check vendor integration multiplied DNS QPS by 6x.",
+    "attempted": [
+      {"action": "Scale CoreDNS from 2 to 6 replicas", "worked": true, "note": "Mitigated in 8 minutes."},
+      {"action": "Set dnsConfig ndots:2 on checkout-api and use FQDNs with trailing dot", "worked": true, "note": "Permanent fix, DNS QPS down 70%."}
+    ],
+    "resolved_by": "Priya Raman",
+    "mttr_minutes": 20,
+    "postmortem": "Enable NodeLocal DNSCache cluster-wide."
+  },
+  {
+    "id": "INC-2602",
+    "date": "2026-08-14T10:48:00+05:30",
+    "service": "checkout-api",
+    "severity": "SEV2",
+    "title": "Checkout 5xx after v2.38.0 deploy",
+    "symptoms": "5xx at 14% three minutes after v2.38.0 rollout reached 60%. Logs: 'pgbouncer: no more connections allowed (max_client_conn)'. v2.38.0 added a second DB engine for the read replica.",
+    "root_cause": "The new read-replica engine opened its own pool of 10 per pod, doubling client connections. The CI pool check only counted the primary engine.",
+    "attempted": [
+      {"action": "Pause the Argo rollout and roll back (kubectl argo rollouts abort checkout-api)", "worked": true, "note": "Recovered in 5 minutes. On-call Rohan Das remembered not to restart pods after reading INC-2417."}
+    ],
+    "resolved_by": "Rohan Das",
+    "mttr_minutes": 11,
+    "postmortem": "CI pool check now sums every engine's pool. Third pgbouncer exhaustion in five months: always suspect it first when checkout-api 5xx follows a deploy."
+  },
+  {
+    "id": "INC-2630",
+    "date": "2026-09-03T21:15:00+05:30",
+    "service": "edge-cdn",
+    "severity": "SEV3",
+    "title": "Stale product images after catalog update",
+    "symptoms": "Customers see old product images for up to 6 hours. Cache-Control on image responses is 'public, max-age=21600' with no surrogate keys.",
+    "root_cause": "Image service did not emit Surrogate-Key headers, so catalog updates could not purge specific objects.",
+    "attempted": [
+      {"action": "Full CDN purge", "worked": true, "note": "Worked, but origin load tripled for 20 minutes. Avoid during peak."}
+    ],
+    "resolved_by": "Aisha Khan",
+    "mttr_minutes": 44,
+    "postmortem": "Added Surrogate-Key per SKU; use targeted purge."
+  }
+]
