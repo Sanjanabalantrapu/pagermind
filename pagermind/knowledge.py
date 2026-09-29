@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 DEPENDENCY_HINTS = {
     "pgbouncer": "payments-db",
@@ -78,7 +79,7 @@ def feedback_to_memory(
         "context": "triage feedback",
         "tags": service_tags(alert["service"], alert.get("details", ""), step) + ["kind:feedback"],
         "timestamp": when,
-        "document_id": f"feedback-{alert.get('id', 'adhoc')}-{_stamp(when)}",
+        "document_id": f"feedback-{alert.get('id', 'adhoc')}-{_stamp(when)}-{uuid4().hex[:8]}",
         "metadata": {"alert_id": str(alert.get("id", "adhoc")), "verdict": verdict},
     }
 
